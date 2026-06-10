@@ -25,3 +25,4 @@ pub use mailbox::{ActorReceiver, Mailbox};
 pub mod client;
 
 mod http;
+pub use http::{ConsensusRoundReader, read_only_router};

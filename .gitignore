@@ -6,6 +6,10 @@
 /local
 /deploy
 
+# Local sequencer/replica configs (may contain endpoint credentials)
+/sequencer.yaml
+/replica.yaml
+
 # Dust
 mprocs.log
 .DS_Store

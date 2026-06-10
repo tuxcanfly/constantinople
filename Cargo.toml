@@ -13,11 +13,13 @@ exclude = ["**/target"]
 resolver = "2"
 members = [
   "crates/application",
+  "crates/coro-engine",
   "crates/engine",
   "crates/indexer",
   "crates/mempool",
   "crates/primitives",
   "bin/deploy",
+  "bin/sequencer",
   "bin/spammer",
   "bin/validator",
 ]
@@ -38,11 +40,13 @@ redundant-clone = "warn"
 
 [workspace.dependencies]
 # Workspace
+constantinople-coro-engine = { path = "crates/coro-engine" }
 constantinople-engine = { path = "crates/engine" }
 constantinople-indexer = { path = "crates/indexer" }
 constantinople-mempool = { path = "crates/mempool" }
 constantinople-primitives = { path = "crates/primitives" }
 constantinople-application = { path = "crates/application" }
+coro-demo = { path = "../coro/coro-demo" }
 
 # Commonware
 commonware-actor = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
@@ -62,6 +66,12 @@ commonware-resolver = { git = "https://github.com/commonwarexyz/monorepo.git", r
 commonware-broadcast = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
 commonware-consensus = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
 commonware-cryptography = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea", default-features = false }
+
+# Coro (Celestia DA)
+coro = { path = "../coro/coro" }
+celestia-client = "1.0.0"
+async-trait = "0.1"
+base64 = "0.22"
 
 # Exoware
 exoware-sdk = { git = "https://github.com/exowarexyz/monorepo.git", rev = "6d921fe1685bd63b5faa3f3e529a37595d7fbc09" }
@@ -96,6 +106,19 @@ serde_yaml = "0.9"
 derive_more = { version = "2.1.1", default-features = false }
 prometheus-client = { version = "0.24.0", default-features = false }
 tracing-subscriber = "0.3"
+
+# `coro` depends on the crates.io releases of the commonware crates. Constantinople
+# pins the monorepo git rev that *is* that release (2026.5.0), but cargo treats the
+# two sources as distinct packages. Patch the crates.io entries coro uses to the same
+# git rev so there is exactly one copy of each crate (and one set of trait types) in
+# the build graph.
+[patch.crates-io]
+commonware-actor = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
+commonware-codec = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
+commonware-cryptography = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
+commonware-resolver = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
+commonware-runtime = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
+commonware-utils = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "156ceea81aa7622b4c8b4c7e9b0a3c87abd8dfea" }
 
 [profile.samply]
 inherits = "release"

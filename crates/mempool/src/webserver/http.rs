@@ -1,6 +1,7 @@
 //! HTTP handlers for the mempool webserver.
 
 use super::{
+    AccountReader,
     Mailbox,
     actor::{AccountReaderCell, IngestStatus},
 };
@@ -54,6 +55,16 @@ where
 
 type SharedState<C, P, H, SigSt, HashSt> = Arc<AppState<C, P, H, SigSt, HashSt>>;
 
+/// Synchronous reader for the latest consensus round exposed by read-only
+/// HTTP servers.
+pub type ConsensusRoundReader = Arc<dyn Fn() -> u64 + Send + Sync + 'static>;
+
+#[derive(Clone)]
+struct ReadOnlyState {
+    account_reader: Arc<dyn AccountReader>,
+    consensus_round: ConsensusRoundReader,
+}
+
 /// Builds the axum [`Router`] for the mempool HTTP API.
 pub(super) fn router<C, P, H, SigSt, HashSt>(state: SharedState<C, P, H, SigSt, HashSt>) -> Router
 where
@@ -94,6 +105,29 @@ where
         .layer(DefaultBodyLimit::max(max_request_bytes))
         .layer(cors)
         .with_state(state)
+}
+
+/// Builds a read-only subset of the mempool HTTP API.
+///
+/// Replicas use this to serve explorer-compatible account and round lookups
+/// without exposing transaction submission endpoints.
+pub fn read_only_router(
+    account_reader: Arc<dyn AccountReader>,
+    consensus_round: ConsensusRoundReader,
+) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET])
+        .allow_headers([CONTENT_TYPE]);
+
+    Router::new()
+        .route("/account/{public_key}", get(fetch_read_only_account))
+        .route("/consensus/round", get(fetch_read_only_consensus_round))
+        .layer(cors)
+        .with_state(ReadOnlyState {
+            account_reader,
+            consensus_round,
+        })
 }
 
 const fn max_request_bytes(max_batch_bytes: usize) -> usize {
@@ -364,6 +398,43 @@ where
         return (StatusCode::SERVICE_UNAVAILABLE, String::new());
     };
 
+    fetch_account_with_reader(reader.as_ref(), public_key).await
+}
+
+async fn fetch_read_only_account(
+    State(state): State<ReadOnlyState>,
+    Path(public_key): Path<String>,
+) -> (StatusCode, String) {
+    let Some(bytes) = from_hex(&public_key) else {
+        return (StatusCode::BAD_REQUEST, String::new());
+    };
+    if bytes.len() != TransactionPublicKey::SIZE {
+        return (StatusCode::BAD_REQUEST, String::new());
+    }
+    let public_key = match TransactionPublicKey::decode(bytes.as_slice()) {
+        Ok(public_key) => public_key,
+        Err(_) => return (StatusCode::BAD_REQUEST, String::new()),
+    };
+
+    fetch_account_with_reader(state.account_reader.as_ref(), public_key).await
+}
+
+async fn fetch_read_only_consensus_round(
+    State(state): State<ReadOnlyState>,
+) -> (StatusCode, String) {
+    (
+        StatusCode::OK,
+        serde_json::to_string(&ConsensusRoundResponse {
+            round: (state.consensus_round)(),
+        })
+        .expect("consensus round serialization cannot fail"),
+    )
+}
+
+async fn fetch_account_with_reader(
+    reader: &dyn AccountReader,
+    public_key: TransactionPublicKey,
+) -> (StatusCode, String) {
     reader.get(public_key).await.map_or_else(
         || (StatusCode::NOT_FOUND, String::new()),
         |account| {
@@ -408,14 +479,16 @@ impl From<Nonce> for NonceResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, router};
+    use super::{AppState, read_only_router, router};
     use axum::{
         body::Body,
         http::{Method, Request, StatusCode, header},
     };
     use commonware_codec::Encode;
-    use commonware_cryptography::{ed25519, sha256};
+    use commonware_cryptography::{Signer as _, ed25519, sha256};
     use commonware_parallel::Sequential;
+    use constantinople_primitives::{Account, Nonce, TransactionPublicKey};
+    use futures::future::{BoxFuture, FutureExt as _};
     use futures::executor::block_on;
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
@@ -436,6 +509,17 @@ mod tests {
         });
 
         router::<sha256::Digest, ed25519::PublicKey, sha256::Sha256, Sequential, Sequential>(state)
+    }
+
+    struct StaticAccountReader {
+        public_key: TransactionPublicKey,
+        account: Account,
+    }
+
+    impl super::super::AccountReader for StaticAccountReader {
+        fn get<'a>(&'a self, public_key: TransactionPublicKey) -> BoxFuture<'a, Option<Account>> {
+            async move { (public_key == self.public_key).then_some(self.account) }.boxed()
+        }
     }
 
     #[test]
@@ -486,5 +570,49 @@ mod tests {
             response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
             Some(&header::HeaderValue::from_static("*")),
         );
+    }
+
+    #[test]
+    fn read_only_router_serves_account_and_blocks_submission() {
+        let signer = ed25519::PrivateKey::from_seed(7);
+        let public_key = TransactionPublicKey::ed25519(signer.public_key());
+        let account = Account {
+            balance: 42,
+            nonce: Nonce::new(3, 5),
+        };
+        let app = read_only_router(
+            Arc::new(StaticAccountReader {
+                public_key: public_key.clone(),
+                account,
+            }),
+            Arc::new(|| 11),
+        );
+
+        let account_request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/account/{public_key}"))
+            .body(Body::empty())
+            .expect("request should build");
+        let account_response =
+            block_on(app.clone().oneshot(account_request)).expect("router should respond");
+        assert_eq!(account_response.status(), StatusCode::OK);
+
+        let round_request = Request::builder()
+            .method(Method::GET)
+            .uri("/consensus/round")
+            .body(Body::empty())
+            .expect("request should build");
+        let round_response =
+            block_on(app.clone().oneshot(round_request)).expect("router should respond");
+        assert_eq!(round_response.status(), StatusCode::OK);
+
+        let submit_request = Request::builder()
+            .method(Method::POST)
+            .uri("/transactions")
+            .body(Body::empty())
+            .expect("request should build");
+        let submit_response =
+            block_on(app.oneshot(submit_request)).expect("router should respond");
+        assert_eq!(submit_response.status(), StatusCode::NOT_FOUND);
     }
 }

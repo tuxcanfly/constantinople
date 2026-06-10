@@ -1,0 +1,46 @@
+[package]
+name = "constantinople-sequencer"
+description = "DA-backed Constantinople sequencer and replica binary"
+version = "0.0.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Workspace
+constantinople-coro-engine.workspace = true
+constantinople-mempool.workspace = true
+constantinople-primitives.workspace = true
+coro-demo.workspace = true
+
+# Coro
+coro.workspace = true
+
+# Commonware
+commonware-codec.workspace = true
+commonware-consensus.workspace = true
+commonware-cryptography = { workspace = true, features = ["std", "sha2-asm"] }
+commonware-formatting.workspace = true
+commonware-parallel.workspace = true
+commonware-runtime.workspace = true
+commonware-utils.workspace = true
+
+# Other
+axum.workspace = true
+clap = { workspace = true, features = ["derive", "std"] }
+serde = { workspace = true, features = ["derive"] }
+serde_yaml.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+
+[[bin]]
+name = "constantinople-sequencer"
+path = "src/main.rs"
